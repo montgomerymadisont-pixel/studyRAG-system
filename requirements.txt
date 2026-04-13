@@ -5,3 +5,4 @@ pypdf
 requests
 numpy
 aiofiles
+pymupdf

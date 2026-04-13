@@ -233,7 +233,18 @@ function appendMessage(role, content, sources = []) {
   if (sources.length > 0) {
     sourcesHtml = `
       <div class="message-sources">
-        ${sources.map(s => `<span class="source-badge">📄 ${s}</span>`).join('')}
+        ${sources.map(s => {
+          if (typeof s === 'string') {
+            return `<span class="source-badge">📄 ${s}</span>`;
+          } else {
+            return `
+              <div class="source-item">
+                <span class="source-badge">📄 ${s.name} (Page ${s.page})</span>
+                ${s.image ? `<a href="${s.image}" target="_blank"><img src="${s.image}" class="source-image" alt="Source Page ${s.page}" loading="lazy"/></a>` : ''}
+              </div>
+            `;
+          }
+        }).join('')}
       </div>
     `;
   }

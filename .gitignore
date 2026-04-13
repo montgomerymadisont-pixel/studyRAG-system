@@ -16,3 +16,6 @@ pyrightconfig.json
 /knowledge/
 /playground/
 /prompting/
+venv/
+public/pages/*
+!public/pages/.gitkeep
