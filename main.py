@@ -2,6 +2,7 @@ import os
 import uuid
 import json
 import math
+import asyncio
 import requests
 import numpy as np
 from datetime import datetime
@@ -34,9 +35,11 @@ EMBED_MODEL = os.environ.get("EMBED_MODEL", "nomic-embed-text")
 CHAT_MODEL = os.environ.get("CHAT_MODEL", "llama3.2")
 
 # --- Ollama API Helpers ---
-def get_embedding(text: str) -> List[float]:
+async def get_embedding(text: str) -> List[float]:
     try:
-        res = requests.post(f"{OLLAMA_BASE}/api/embed", json={"model": EMBED_MODEL, "input": text})
+        res = await asyncio.to_thread(
+            requests.post, f"{OLLAMA_BASE}/api/embed", json={"model": EMBED_MODEL, "input": text}
+        )
         res.raise_for_status()
         return res.json().get("embeddings")[0]
     except Exception as e:
@@ -118,10 +121,22 @@ class VectorStore:
             return []
         
         qe = np.array(query_embedding)
+        all_embeddings = np.array([e["embedding"] for e in self.entries])
+        
+        # Vectorized cosine similarity
+        mags = np.linalg.norm(all_embeddings, axis=1)
+        qe_mag = np.linalg.norm(qe)
+        
+        valid_mask = (mags != 0) & (qe_mag != 0)
+        scores = np.zeros(len(self.entries))
+        
+        if qe_mag != 0:
+            dots = np.dot(all_embeddings, qe)
+            scores[valid_mask] = dots[valid_mask] / (mags[valid_mask] * qe_mag)
+            
         scored = []
-        for e in self.entries:
-            score = self.cosine(qe, e["embedding"])
-            scored.append({**e, "score": score})
+        for i, e in enumerate(self.entries):
+            scored.append({**e, "score": float(scores[i])})
             
         scored.sort(key=lambda x: x["score"], reverse=True)
         return scored[:top_k]
@@ -175,17 +190,22 @@ async def upload_pdf(pdf: UploadFile = File(...)):
             os.remove(file_path)
             raise HTTPException(status_code=400, detail="Could not extract text from PDF. It may be scanned/image-based.")
             
-        for i, chunk_data in enumerate(all_chunks):
-            chunk = chunk_data["text"]
+        async def process_chunk(i, chunk_data):
+            chunk_str = chunk_data["text"]
             page_num = chunk_data["pageNumber"]
-            embedding = get_embedding(chunk)
+            embedding = await get_embedding(chunk_str)
+            return (i, page_num, chunk_str, embedding)
+
+        processed = await asyncio.gather(*(process_chunk(i, c) for i, c in enumerate(all_chunks)))
+        
+        for i, page_num, chunk_str, embedding in processed:
             vector_store.add(
                 f"{docId}_chunk_{i}",
                 docId,
                 pdf.filename,
                 i,
                 page_num,
-                chunk,
+                chunk_str,
                 embedding
             )
 
@@ -231,7 +251,7 @@ async def chat(request: ChatRequest):
             "sources": []
         }
 
-    question_embedding = get_embedding(question)
+    question_embedding = await get_embedding(question)
     results = vector_store.query(question_embedding, 5)
 
     context = "\n\n---\n\n".join([
